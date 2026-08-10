@@ -55,7 +55,9 @@
         }                                                                     \
     } while (0)
 
-namespace {
+// Namespace nominato (non anonimo): nvcc pone restrizioni sul linkage interno
+// delle funzioni __global__, quindi si evita il namespace anonimo.
+namespace kk {
 
 constexpr int kBlockSize = 256;   // 8 warp per blocco: buon compromesso fra
                                   // occupancy e shared memory disponibile
@@ -291,7 +293,9 @@ __global__ void finalize_opt_kernel(float* __restrict__ C,
     }
 }
 
-}  // namespace
+}  // namespace kk
+
+using namespace kk;
 
 // ===========================================================================
 //  Host: informazioni sul device

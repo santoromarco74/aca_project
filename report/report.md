@@ -179,6 +179,17 @@ Si verifica inoltre la **monotonia dell'SSE** lungo le iterazioni: è la
 proprietà fondamentale dell'algoritmo di Lloyd, e un errore negli accumulatori
 della fase di aggiornamento la viola immediatamente.
 
+Va segnalato che l'ARI non è sempre 1: su una configurazione più difficile
+($n=5\cdot10^5$, $d=32$, $k=32$, $\sigma=1.0$) si è misurato **ARI = 0.886**.
+Non è un difetto dell'implementazione ma una proprietà nota dell'algoritmo:
+Lloyd converge a un minimo *locale*, e con $k$ elevato è frequente che un
+cluster vero venga spezzato in due mentre due cluster vicini vengono fusi.
+Le librerie di riferimento aggirano il problema con `n_init` ripetizioni da
+inizializzazioni diverse, tenendo la soluzione a SSE minimo. Il punto rilevante
+per questo progetto è che **tutte e quattro le implementazioni cadono nello
+stesso minimo locale**, essendo deterministiche e partendo dagli stessi
+centroidi: è esattamente ciò che rende il confronto valido.
+
 ### B. Equivalenza fra implementazioni
 
 Le versioni parallele devono riprodurre il risultato della seriale. Non si
@@ -200,7 +211,7 @@ l'assenza di divisioni per zero), e dimensioni non multiple del block size CUDA
 ($n=1234$, $d=7$, $k=13$) per intercettare errori nella gestione della coda
 della griglia.
 
-**Esito complessivo: 38 verifiche eseguite, 0 fallite** nella build CPU.
+**Esito complessivo: 38 verifiche eseguite, 0 fallite** nella build CPU (`./build/kmeans_test`).
 Con la build CUDA la suite include automaticamente anche `cuda_naive` e
 `cuda_opt` (numero di verifiche più alto).
 
@@ -222,21 +233,89 @@ pochi decimi percentuali.
 | **Compilatore CPU** | GCC 13.3.0, `-O3 -fopenmp`, C++17 |
 | **GPU** | *(da compilare dopo l'esecuzione su Colab/cluster)* |
 | **Compilatore CUDA** | *(nvcc, versione e `-arch`)* |
-| **Metodologia** | mediana su 3 ripetizioni, prima esecuzione scartata come warm-up |
+| **Metodologia** | mediana su ripetizioni, prima esecuzione scartata come warm-up |
 
 Il tetto teorico allo speedup OpenMP su questa macchina è **4x**: i core sono
-quattro e senza hyperthreading.
+quattro e senza hyperthreading. È un limite importante da tenere presente
+leggendo i risultati — e proprio per questo il confronto a tre (seriale,
+multicore, GPU) è più informativo di un confronto a due: separa il guadagno
+"da più core" da quello "da architettura GPU".
 
 ### 4.2 Risultati CPU
 
-*(Compilare con l'output di `./scripts/run_benchmarks.sh`; i numeri della
-configurazione di riferimento sono riportati in `results/benchmarks.csv`.)*
+Configurazione di riferimento della campagna leggera ($n=10^5$, $d=32$, $k=32$,
+20 iterazioni, mediana su ripetizioni con warm-up scartato):
 
 | Implementazione | Tempo compute (s) | Speedup | Efficienza |
 |---|---|---|---|
-| Seriale | | 1.00x | — |
-| OpenMP (2 thread) | | | |
-| OpenMP (4 thread) | | | |
+| Seriale (1 core) | 5.555 | 1.00x | — |
+| OpenMP, 1 thread | 5.898 | 0.94x | — |
+| OpenMP, 2 thread | 3.017 | 1.95x | 97.7% |
+| OpenMP, 4 thread | 1.469 | 4.01x | 100.4% |
+
+Lo speedup e l'efficienza dell'ultima colonna sono calcolati rispetto a
+OpenMP a 1 thread (scalabilità *forte*), non rispetto al seriale: è la
+convenzione corretta, perché isola l'effetto dell'aggiunta di core dall'overhead
+introdotto dal runtime OpenMP. Quell'overhead è visibile nella riga a 1 thread,
+che è circa il 6% più lenta della versione seriale pura.
+
+Due osservazioni oneste su questi numeri:
+
+- il valore a 4 thread (4.01x, efficienza 100.4%) è **leggermente superlineare**,
+  il che è fisicamente impossibile: si tratta di rumore di misura, presumibilmente
+  dovuto a effetti di cache e alla variabilità dello scheduler. Con una sola
+  ripetizione cronometrata l'incertezza è dell'ordine del qualche percento, quindi
+  la lettura corretta è "efficienza sostanzialmente del 100%", non "superlineare";
+- la scalabilità quasi ideale non è sorprendente e conferma l'analisi del
+  §1: il passo di assegnazione è embarrassingly parallel e domina il tempo, mentre
+  la parte sincronizzata (fusione degli accumulatori) costa
+  $O(\text{num\_threads} \cdot k \cdot d)$, del tutto trascurabile rispetto a
+  $O(n \cdot k \cdot d)$.
+
+Su un caso più grande ($n=5 \cdot 10^5$, $d=32$, $k=32$, 100 iterazioni) il
+divario si conferma: **133.75 s** per il seriale contro **34.77 s** per OpenMP a
+4 thread, cioè **3.85x**, con SSE ed etichette *identiche* alla baseline.
+
+#### Scalabilità in N, K, D (CPU)
+
+Tempi in secondi, mediana; `sp.` è lo speedup OpenMP a 4 thread sul seriale.
+
+| N ($d=32$, $k=32$) | seriale | OpenMP | sp. |
+|---|---|---|---|
+| 10 000 | 0.494 | 0.128 | 3.87x |
+| 50 000 | 0.524 | 0.139 | 3.78x |
+| 100 000 | 5.555 | 1.451 | 3.83x |
+| 200 000 | 10.822 | 2.911 | 3.72x |
+
+| K ($n=10^5$, $d=32$) | seriale | OpenMP | sp. |
+|---|---|---|---|
+| 8 | 1.518 | 0.412 | 3.69x |
+| 16 | 2.831 | 0.780 | 3.63x |
+| 32 | 5.555 | 1.451 | 3.83x |
+| 64 | 10.909 | 2.822 | 3.87x |
+
+| D ($n=10^5$, $k=32$) | seriale | OpenMP | sp. |
+|---|---|---|---|
+| 2 | 0.474 | 0.149 | 3.19x |
+| 8 | 1.388 | 0.385 | 3.60x |
+| 32 | 5.555 | 1.451 | 3.83x |
+| 64 | 11.498 | 2.871 | 4.01x |
+
+I tempi crescono **linearmente** in $N$, $K$ e $D$, come previsto dalla
+complessità $O(n \cdot k \cdot d)$ per iterazione: è una verifica indiretta ma
+utile che l'implementazione non abbia costi nascosti superlineari.
+
+Lo speedup OpenMP cresce leggermente con $D$ (3.19x a $d=2$, 4.01x a $d=64$):
+con vettori molto corti il lavoro per punto è piccolo e l'overhead per iterazione
+del ciclo parallelo pesa di più in proporzione. È lo stesso fenomeno che su GPU
+si manifesta come necessità di avere abbastanza lavoro per thread.
+
+> **Nota sulle iterazioni.** Configurazioni diverse convergono in un numero
+> diverso di iterazioni (indicato in `results/benchmarks.csv`), quindi i tempi
+> **non** sono confrontabili *fra righe diverse* di queste tabelle. Lo sono
+> invece all'interno di una stessa riga, dove tutte le implementazioni eseguono
+> esattamente le stesse iterazioni sugli stessi dati — ed è quello che serve per
+> lo speedup.
 
 ### 4.3 Risultati GPU
 
@@ -270,7 +349,10 @@ questa a fissare il tetto asintotico allo speedup complessivo.
 
 ### 4.5 Curve di scalabilità
 
-Tre studi, in `results/figures/`:
+Le figure sono generate da `scripts/plot_results.py` in `results/figures/`:
+`speedup_vs_n.png`, `speedup_vs_k.png`, `speedup_vs_d.png`, `omp_scaling.png`.
+Con la build CUDA le stesse figure includono automaticamente anche le due curve
+GPU. Cosa aspettarsi da ciascuna:
 
 - **speedup vs N** ($d=32$, $k=32$): lo speedup GPU deve *crescere* con $N$ e
   saturare quando la griglia è abbastanza grande da coprire tutti gli SM. Uno

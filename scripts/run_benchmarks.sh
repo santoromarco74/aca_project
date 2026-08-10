@@ -11,6 +11,11 @@
 #    4. scalabilita' forte OpenMP         -> speedup al variare del numero di thread
 #
 #  Uso:  ./scripts/run_benchmarks.sh [percorso_eseguibile]
+#
+#  Le dimensioni sono sovrascrivibili da ambiente, utile per una campagna
+#  ridotta su macchine senza GPU (dove la baseline seriale domina i tempi):
+#
+#    REPS=1 ITER=20 N_LIST="10000 50000 100000" ./scripts/run_benchmarks.sh
 # ===========================================================================
 
 set -euo pipefail
@@ -20,6 +25,15 @@ OUT_DIR="results"
 CSV="${OUT_DIR}/benchmarks.csv"
 REPS="${REPS:-3}"
 ITER="${ITER:-50}"
+
+# Dimensioni degli sweep e configurazione di riferimento (n, d, k fissi negli
+# sweep in cui non variano). Tutte sovrascrivibili da ambiente.
+N_LIST="${N_LIST:-10000 50000 100000 250000 500000 1000000 2000000}"
+K_LIST="${K_LIST:-4 8 16 32 64 128 256}"
+D_LIST="${D_LIST:-2 4 8 16 32 64 128}"
+REF_N="${REF_N:-500000}"
+REF_D="${REF_D:-32}"
+REF_K="${REF_K:-32}"
 
 if [[ ! -x "${BIN}" ]]; then
     echo "Eseguibile non trovato: ${BIN}" >&2
@@ -40,38 +54,44 @@ mkdir -p "${OUT_DIR}"
 rm -f "${CSV}"
 
 echo
-echo "=== 1/4  Scalabilita' in N (d=32, k=32) ==="
-for N in 10000 50000 100000 250000 500000 1000000 2000000; do
+echo "=== 1/4  Scalabilita' in N (d=${REF_D}, k=${REF_K}) ==="
+for N in ${N_LIST}; do
     echo "--- n=${N}"
-    "${BIN}" --n "${N}" --d 32 --k 32 --iter "${ITER}" --reps "${REPS}" \
+    "${BIN}" --n "${N}" --d "${REF_D}" --k "${REF_K}" --iter "${ITER}" --reps "${REPS}" \
              --impl "${IMPLS}" --csv "${CSV}"
 done
 
 echo
-echo "=== 2/4  Scalabilita' in K (n=500000, d=32) ==="
-for K in 4 8 16 32 64 128 256; do
+echo "=== 2/4  Scalabilita' in K (n=${REF_N}, d=${REF_D}) ==="
+for K in ${K_LIST}; do
     echo "--- k=${K}"
-    "${BIN}" --n 500000 --d 32 --k "${K}" --iter "${ITER}" --reps "${REPS}" \
+    "${BIN}" --n "${REF_N}" --d "${REF_D}" --k "${K}" --iter "${ITER}" --reps "${REPS}" \
              --impl "${IMPLS}" --csv "${CSV}"
 done
 
 echo
-echo "=== 3/4  Scalabilita' in D (n=500000, k=32) ==="
-for D in 2 4 8 16 32 64 128; do
+echo "=== 3/4  Scalabilita' in D (n=${REF_N}, k=${REF_K}) ==="
+for D in ${D_LIST}; do
     echo "--- d=${D}"
-    "${BIN}" --n 500000 --d "${D}" --k 32 --iter "${ITER}" --reps "${REPS}" \
+    "${BIN}" --n "${REF_N}" --d "${D}" --k "${REF_K}" --iter "${ITER}" --reps "${REPS}" \
              --impl "${IMPLS}" --csv "${CSV}"
 done
 
 echo
-echo "=== 4/4  Scalabilita' forte OpenMP (n=500000, d=32, k=32) ==="
+echo "=== 4/4  Scalabilita' forte OpenMP (n=${REF_N}, d=${REF_D}, k=${REF_K}) ==="
 MAX_THREADS="$(nproc)"
+THREAD_LIST=""
 T=1
-while [[ "${T}" -le "${MAX_THREADS}" ]]; do
-    echo "--- threads=${T}"
-    "${BIN}" --n 500000 --d 32 --k 32 --iter "${ITER}" --reps "${REPS}" \
-             --impl omp --threads "${T}" --csv "${OUT_DIR}/omp_scaling.csv"
+while [[ "${T}" -lt "${MAX_THREADS}" ]]; do
+    THREAD_LIST="${THREAD_LIST} ${T}"
     T=$((T * 2))
+done
+THREAD_LIST="${THREAD_LIST} ${MAX_THREADS}"
+
+for T in ${THREAD_LIST}; do
+    echo "--- threads=${T}"
+    "${BIN}" --n "${REF_N}" --d "${REF_D}" --k "${REF_K}" --iter "${ITER}" --reps "${REPS}" \
+             --impl omp --threads "${T}" --csv "${OUT_DIR}/omp_scaling.csv"
 done
 
 echo

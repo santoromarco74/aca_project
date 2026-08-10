@@ -42,6 +42,17 @@ ORDER = ["serial", "omp", "cuda_naive", "cuda_opt"]
 def add_speedup(df):
     """Aggiunge le colonne di speedup, normalizzando rispetto al seriale
     all'interno di ciascuna configurazione (n, d, k)."""
+    # La configurazione di riferimento ricorre in piu' sweep (e' il punto in cui
+    # le curve si incrociano), quindi compare piu' volte nel CSV. Si consolidano
+    # le righe duplicate prendendo la mediana dei tempi: senza questo passaggio
+    # il join con la baseline duplicherebbe le righe e i grafici mostrerebbero
+    # due punti sovrapposti alla stessa ascissa.
+    df = (df.groupby(["impl", "n", "d", "k", "threads"], as_index=False)
+            .agg(iterations=("iterations", "first"),
+                 inertia=("inertia", "first"),
+                 time_compute_s=("time_compute_s", "median"),
+                 time_total_s=("time_total_s", "median")))
+
     base = (df[df["impl"] == "serial"]
             .set_index(["n", "d", "k"])[["time_compute_s", "time_total_s"]]
             .rename(columns={"time_compute_s": "base_compute",
@@ -124,6 +135,11 @@ def main():
     ap.add_argument("--csv", default="results/benchmarks.csv")
     ap.add_argument("--omp-csv", default="results/omp_scaling.csv")
     ap.add_argument("--outdir", default="results/figures")
+    # Configurazione di riferimento: deve coincidere con REF_N/REF_D/REF_K
+    # usati da run_benchmarks.sh, altrimenti gli sweep in K e D restano vuoti.
+    ap.add_argument("--ref-n", type=int, default=500000)
+    ap.add_argument("--ref-d", type=int, default=32)
+    ap.add_argument("--ref-k", type=int, default=32)
     args = ap.parse_args()
 
     if not os.path.exists(args.csv):
@@ -133,20 +149,24 @@ def main():
     df = add_speedup(pd.read_csv(args.csv))
 
     print("Generazione figure:")
-    plot_sweep(df, "n", {"d": 32, "k": 32},
-               "Speedup al crescere della dimensione del dataset (d=32, k=32)",
+    plot_sweep(df, "n", {"d": args.ref_d, "k": args.ref_k},
+               f"Speedup al crescere della dimensione del dataset "
+               f"(d={args.ref_d}, k={args.ref_k})",
                "Numero di punti N", os.path.join(args.outdir, "speedup_vs_n.png"))
-    plot_sweep(df, "k", {"n": 500000, "d": 32},
-               "Speedup al crescere del numero di cluster (n=5e5, d=32)",
+    plot_sweep(df, "k", {"n": args.ref_n, "d": args.ref_d},
+               f"Speedup al crescere del numero di cluster "
+               f"(n={args.ref_n:.0e}, d={args.ref_d})",
                "Numero di cluster K", os.path.join(args.outdir, "speedup_vs_k.png"))
-    plot_sweep(df, "d", {"n": 500000, "k": 32},
-               "Speedup al crescere della dimensionalita' (n=5e5, k=32)",
+    plot_sweep(df, "d", {"n": args.ref_n, "k": args.ref_k},
+               f"Speedup al crescere della dimensionalita' "
+               f"(n={args.ref_n:.0e}, k={args.ref_k})",
                "Dimensionalita' D", os.path.join(args.outdir, "speedup_vs_d.png"))
     plot_omp_scaling(args.omp_csv, os.path.join(args.outdir, "omp_scaling.png"))
 
     # Tabella riassuntiva pronta da incollare nel report.
-    print("\nTabella riassuntiva (configurazione di riferimento n=5e5, d=32, k=32):")
-    ref = df[(df["n"] == 500000) & (df["d"] == 32) & (df["k"] == 32)]
+    print(f"\nTabella riassuntiva (configurazione di riferimento "
+          f"n={args.ref_n}, d={args.ref_d}, k={args.ref_k}):")
+    ref = df[(df["n"] == args.ref_n) & (df["d"] == args.ref_d) & (df["k"] == args.ref_k)]
     if ref.empty:
         print("  nessuna riga per la configurazione di riferimento")
         return
