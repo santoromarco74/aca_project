@@ -1,0 +1,14 @@
+build/
+cmake-build-*/
+results/
+*.o
+*.obj
+*.exe
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+*.sqlite
+__pycache__/
+.ipynb_checkpoints/
+.vscode/
+.idea/
